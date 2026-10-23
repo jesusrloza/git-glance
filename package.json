@@ -1,0 +1,30 @@
+{
+  "name": "git-glance",
+  "module": "src/cli.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "report": "bun src/cli.ts",
+    "preview": "bun src/preview.ts",
+    "view": "bun src/view.ts",
+    "fetch": "bun src/fetch.ts",
+    "doctor": "bun src/doctor.ts",
+    "authors": "bun src/authors.ts",
+    "clean": "rm -rf out",
+    "test": "bun test",
+    "type-check": "tsc --noEmit",
+    "check": "biome check ./src",
+    "check:fix": "biome check --write ./src",
+    "format": "biome format --write ./src"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/bun": "^1.4.2",
+    "@types/d3": "^7.4.3",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "d3": "^7.9.0",
+    "html-to-image": "^1.11.13"
+  }
+}
