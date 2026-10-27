@@ -271,7 +271,7 @@ main {
 .chart-legend .gap-active::before { background: var(--accent); }
 .chart-legend .gap-empty::before { background: var(--gap-empty); }
 .chart-legend .gap-other::before { background: var(--gap-other); }
-#lanes, #bars, #stack, #gaps, #heatmap, #churn, #types, #sizes, #punchcard, #hotspots, #branches, #collab, #prs, #reviews, #ci {
+#lanes, #bars, #stack, #gaps, #heatmap, #churn, #types, #sizes, #punchcard, #hotspots, #branches, #cleanup, #collab, #status, #waiting, #prs, #reviews, #ci {
   overflow-x: auto;
 }
 .row-2 {
@@ -358,6 +358,72 @@ td.nowrap { white-space: nowrap; }
 .run-failures { margin: 0; padding-left: 1.1rem; font-size: 0.85rem; }
 .run-failures li { margin: 0.25rem 0; }
 #github-note { margin: 0.35rem 0 0; }
+.card-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.export-stamp { margin: 1rem 0 0; font-size: 0.72rem; color: var(--muted); }
+td.overdue { color: var(--gap-other); font-weight: 600; }
+.status-cols {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+}
+.status-col {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.75rem 0.85rem;
+  background: var(--card-inset);
+}
+.status-col h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.status-shipped h3 { color: var(--accent); }
+.status-attention h3 { color: var(--gap-other); }
+.status-col ul { margin: 0; padding: 0; list-style: none; font-size: 0.85rem; }
+.status-col li { margin: 0 0 0.6rem; line-height: 1.35; }
+.status-col li:last-child { margin-bottom: 0; }
+.status-note { display: block; font-size: 0.75rem; }
+.status-col .repo-chip { margin-right: 0.4rem; }
+.group-title {
+  margin: 1rem 0 0.25rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.btn-small {
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--ink);
+  padding: 0.2rem 0.65rem;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  background: var(--select-bg);
+  cursor: pointer;
+}
+.btn-small:focus-visible { border-color: rgb(45 212 191 / 55%); box-shadow: 0 0 0 3px rgb(45 212 191 / 18%); outline: none; }
+.cleanup-commands { margin-top: 1rem; }
+.cleanup-commands summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.cleanup-commands pre {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-radius: 10px;
+}
 .stale {
   margin-left: 0.5rem;
   font-size: 0.7rem;
@@ -461,8 +527,24 @@ function escapeHtml(text: string): string {
 function githubSections(): string {
   return `
       <section class="card">
-        <h2>Pull requests</h2>
-        <p class="hint">Pull requests by the selected author that were opened, merged, closed or reviewed in the window.</p>
+        <div class="card-head">
+          <h2>Waiting on review</h2>
+          <div class="card-actions no-export">
+            <button type="button" class="btn-small" id="waiting-copy">Copy as text</button>
+          </div>
+        </div>
+        <p class="hint">The selected author's open, ready pull requests with no approval and no changes requested, longest waiting first. Copy the list to nudge reviewers.</p>
+        <div id="waiting"></div>
+      </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>Pull requests</h2>
+          <div class="segmented no-export" id="prs-mode" role="group" aria-label="Which pull requests to list">
+            <button type="button" data-mode="open" aria-pressed="false">Open</button>
+            <button type="button" data-mode="all" aria-pressed="true">All</button>
+          </div>
+        </div>
+        <p class="hint">Pull requests by the selected author that were opened, merged, closed or reviewed in the window. The tiles always count the whole window.</p>
         <div id="prs"></div>
       </section>
       <section class="card">
@@ -514,6 +596,7 @@ export async function renderHtml(data: ReportData, projectRoot: string): Promise
   const script = await artifact.text()
 
   const payload = {
+    generatedOn: data.generatedOn,
     days: data.days,
     weekdays: data.weekdays,
     grain: data.grain,
@@ -535,6 +618,7 @@ export async function renderHtml(data: ReportData, projectRoot: string): Promise
     previousCommits: data.previousCommits.map((c) => ({ ...c, subject: '', files: [] })),
     branches: data.branches,
     tags: data.tags,
+    cleanup: data.cleanup,
     github: data.github,
   }
 
@@ -586,6 +670,16 @@ export async function renderHtml(data: ReportData, projectRoot: string): Promise
         <h2>Overview</h2>
         <p class="hint" id="kpi-hint"></p>
         <div id="kpis" class="kpis"></div>
+      </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>Status update</h2>
+          <div class="card-actions no-export">
+            <button type="button" class="btn-small" id="status-copy">Copy as text</button>
+          </div>
+        </div>
+        <p class="hint">What shipped, what is still open and what is stuck for the selected author. Copy it as text for chat or email, or copy the card as an image.</p>
+        <div id="status"></div>
       </section>
       <section class="card">
         <h2>Repo lanes</h2>
@@ -654,9 +748,20 @@ export async function renderHtml(data: ReportData, projectRoot: string): Promise
         <div id="hotspots"></div>
       </section>
       <section class="card">
-        <h2>Work in flight</h2>
-        <p class="hint">Branches that moved in the window and still hold commits not on the default branch.</p>
+        <div class="card-head">
+          <h2>Work in flight</h2>
+          <div class="segmented no-export" id="branches-mode" role="group" aria-label="Which branches to show">
+            <button type="button" data-mode="active" aria-pressed="false">Active</button>
+            <button type="button" data-mode="all" aria-pressed="true">All</button>
+          </div>
+        </div>
+        <p class="hint">Branches that moved in the window and still hold commits not on the default branch. Active hides stale branches (no commit in 7+ days) unless they have an open pull request.</p>
         <div id="branches"></div>
+      </section>
+      <section class="card">
+        <h2>Branches to delete</h2>
+        <p class="hint">Your branches from any time that are already on the default branch, squash- or rebase-merged, or whose pull request was closed. Nothing is deleted for you: copy the commands. Run <code>bun run fetch</code> first so branches already deleted on the remote drop off.</p>
+        <div id="cleanup"></div>
       </section>${data.github ? githubSections() : ''}
       <section class="card">
         <h2>Collaboration</h2>

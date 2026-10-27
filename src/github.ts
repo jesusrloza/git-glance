@@ -1,6 +1,6 @@
 import { $ } from 'bun'
 import { isoInWindow } from './window.ts'
-import type { DateWindow, GithubData, PrReview, PullRequestInfo, RepoRef, WorkflowRunInfo } from './types.ts'
+import type { BranchPr, DateWindow, GithubData, PrReview, PullRequestInfo, RepoRef, WorkflowRunInfo } from './types.ts'
 
 export type GithubState = 'ok' | 'disabled' | 'missing' | 'unauthenticated'
 
@@ -56,7 +56,15 @@ export function noreplyLogin(email: string): string | null {
   return m ? m[1]!.toLowerCase() : null
 }
 
-type RawCheck = { __typename?: string; conclusion?: string | null; status?: string; state?: string }
+type RawCheck = {
+  __typename?: string
+  conclusion?: string | null
+  status?: string
+  state?: string
+  startedAt?: string | null
+  completedAt?: string | null
+  createdAt?: string | null
+}
 
 /** Collapse a PR's statusCheckRollup to one state. */
 export function rollupChecks(checks: RawCheck[] | null | undefined): PullRequestInfo['checks'] {
@@ -72,6 +80,18 @@ export function rollupChecks(checks: RawCheck[] | null | undefined): PullRequest
   return pending ? 'pending' : 'success'
 }
 
+/** Newest timestamp across a PR's checks: completion, else start (CheckRun) or creation (StatusContext). */
+export function rollupChecksIso(checks: RawCheck[] | null | undefined): string | null {
+  let latest: string | null = null
+  // GitHub reports an unfinished run's completedAt as a zero timestamp.
+  const real = (iso: string | null | undefined) => (iso && !iso.startsWith('0001-') ? iso : null)
+  for (const c of checks ?? []) {
+    const iso = real(c.completedAt) ?? real(c.startedAt) ?? real(c.createdAt)
+    if (iso && (!latest || iso > latest)) latest = iso
+  }
+  return latest
+}
+
 type RawPr = {
   number: number
   title: string
@@ -80,6 +100,7 @@ type RawPr = {
   isDraft: boolean
   author: { login: string } | null
   createdAt: string
+  updatedAt?: string
   mergedAt: string | null
   closedAt: string | null
   headRefName: string
@@ -87,6 +108,9 @@ type RawPr = {
   reviewDecision: string | null
   reviews: { author: { login: string } | null; state: PrReview['state']; submittedAt: string }[] | null
   statusCheckRollup: RawCheck[] | null
+  reviewRequests?: { __typename?: string; login?: string; name?: string; slug?: string }[] | null
+  additions?: number
+  deletions?: number
 }
 
 /**
@@ -122,6 +146,13 @@ export function parsePrList(text: string, repo: string, window: DateWindow): Pul
       reviewDecision: p.reviewDecision ?? '',
       reviews,
       checks: rollupChecks(p.statusCheckRollup),
+      checksIso: rollupChecksIso(p.statusCheckRollup),
+      reviewRequests: (p.reviewRequests ?? [])
+        .map((r) => (r.login ? r.login.toLowerCase() : (r.slug ?? r.name ?? '')))
+        .filter(Boolean),
+      updatedIso: p.updatedAt ?? p.createdAt,
+      additions: p.additions ?? 0,
+      deletions: p.deletions ?? 0,
     })
   }
   return prs.sort((a, b) => (a.createdIso < b.createdIso ? 1 : -1))
@@ -170,7 +201,7 @@ export function parseCommitLogins(text: string, into: Map<string, Set<string>>) 
 }
 
 const PR_FIELDS =
-  'number,title,url,state,isDraft,author,createdAt,mergedAt,closedAt,headRefName,baseRefName,reviewDecision,reviews,statusCheckRollup'
+  'number,title,url,state,isDraft,author,createdAt,updatedAt,mergedAt,closedAt,headRefName,baseRefName,reviewDecision,reviews,statusCheckRollup,reviewRequests,additions,deletions'
 const RUN_FIELDS = 'databaseId,workflowName,headSha,headBranch,event,conclusion,status,createdAt,url'
 
 async function ghText(cmd: ReturnType<typeof $>, what: string): Promise<string | null> {
@@ -235,4 +266,44 @@ export async function loadGithub(
     loginEmails: Object.fromEntries([...loginEmails].map(([l, set]) => [l, [...set].sort()])),
     slugs,
   }
+}
+
+type RawBranchPr = {
+  number: number
+  url: string
+  headRefName: string
+  state: BranchPr['state']
+  mergedAt: string | null
+  closedAt: string | null
+}
+
+export function parseBranchPrs(text: string, repo: string): BranchPr[] {
+  return (JSON.parse(text) as RawBranchPr[]).map((p) => ({
+    repo,
+    number: p.number,
+    url: p.url,
+    headRef: p.headRefName,
+    state: p.state,
+    mergedIso: p.mergedAt,
+    closedIso: p.closedAt,
+  }))
+}
+
+/**
+ * The newest 1000 PRs per repo regardless of the window, with only the fields
+ * needed to tell whether an old branch was merged or closed through a PR.
+ */
+export async function loadBranchPrs(repos: RepoRef[]): Promise<BranchPr[]> {
+  const perRepo = await Promise.all(
+    repos.map(async (repo) => {
+      const slug = await repoSlug(repo)
+      if (!slug) return []
+      const text = await ghText(
+        $`gh pr list -R ${slug} --state all --limit 1000 --json ${'number,url,headRefName,state,mergedAt,closedAt'}`,
+        `branch PRs for ${slug}`,
+      )
+      return text ? parseBranchPrs(text, repo.name) : []
+    }),
+  )
+  return perRepo.flat()
 }

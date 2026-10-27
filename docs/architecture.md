@@ -22,7 +22,10 @@ config JSON
         git log --all --numstat (window, and the previous window for deltas)
         git for-each-ref + git log base..branch (unmerged branches)
         git for-each-ref refs/tags (tags in the window)
-        when gh is ok: gh pr list, gh run list, gh api …/commits (login ↔ email)
+        git for-each-ref + rev-list + cherry (the subject's branches, any age)
+        when gh is ok: gh pr list, gh run list, gh api …/commits (login ↔ email),
+                       and a second, slim gh pr list with no date filter
+    → classifyCleanup (branches safe to delete)
     → aggregate (subject vs others, calendars, summaries, repoLabels)
     → render markdown + HTML under out/<window>/
 ```
@@ -47,6 +50,7 @@ Reports never write into the scanned work trees. Fetch updates remotes only.
 | `src/resolve-window.ts` | Resolves `--all-time` via earliest commit across repos |
 | `src/git.ts` | `isGitRepo`, remotes, fetch, `git log --numstat` → `Commit[]` (with noise excludes), unmerged branches, tags, email lookback |
 | `src/github.ts` | `gh` availability, remote URL → `owner/name`, PR / run / commit-login loading and their pure parsers |
+| `src/cleanup.ts` | Pure branch-cleanup classifier (merged, rebase-, squash-merged, PR closed, abandoned) and delete commands |
 | `src/commit-kinds.ts` | Pure classifiers shared by markdown and dashboard: Conventional Commit type, size bucket |
 | `src/aggregate.ts` | Pure transform: commits + config + window → `ReportData` (day or month grain) |
 | `src/insights.ts` | Short factual prose for handoff and empty days |
@@ -55,8 +59,9 @@ Reports never write into the scanned work trees. Fetch updates remotes only.
 | `src/html/common.ts` | Dashboard payload type and shared helpers (colors, tooltip, axes) |
 | `src/html/report.ts` | Client-side D3 dashboard entry: lanes, commit charts, author picker, wiring |
 | `src/html/insights.ts` | KPI tiles, churn, commit types/sizes, punchcard, hotspots, work in flight, collaboration |
-| `src/html/github.ts` | GitHub cards (pull requests, reviews given, CI health), PR cell for Work in flight, author → login matching |
-| `src/html/export.ts` | PNG export (html-to-image) and light theme while printing |
+| `src/html/github.ts` | GitHub cards (pull requests, reviews given, CI health), PR status chips and their tooltips, stats helpers, author → login matching |
+| `src/html/share.ts` | Cards meant to be shared: Status update and Waiting on review, plus their copy-as-text output |
+| `src/html/export.ts` | Whole-page and per-card PNG export, image and text clipboard copy, light theme while printing |
 | `src/cli.ts` | `bun run report` |
 | `src/fetch.ts` | `bun run fetch` |
 | `src/doctor.ts` | `bun run doctor` |
@@ -132,6 +137,13 @@ author only.
 - **CI attribution**: `gh run list` has no actor field, so a run counts for an
   author when its `headSha` is one of their commits or its branch is the head
   of one of their PRs.
+- **Branch cleanup is not windowed**: forgotten branches are old by
+  definition, so the scan covers every local and remote branch whose newest
+  tip the subject authored. A branch is only *safe* when every copy is covered
+  (fully merged, patch-identical on base, or nothing newer than the PR that
+  merged or closed it). Long-lived names (`dev`, `staging`, …) and quiet
+  branches with no PR are only suggestions, and their commands come out
+  commented. The tool never deletes anything.
 - **Cheap extra git calls**: `--numstat` adds roughly 0.1 s per repo on a few
   hundred commits; branch checks are two `git` calls per branch that moved in
   the window. A full report stays well under a second on the default repos.

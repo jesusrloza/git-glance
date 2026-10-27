@@ -10,6 +10,7 @@ Work in flight, ship today through `gh` (see the README). Still open:
 
 | Idea | Notes |
 |------|-------|
+| Review-requested timestamps | The *awaiting review* chip shows who a PR waits on and how long it has been open; "requested at" needs `ReviewRequestedEvent` from the PR timeline. Same API as the next row. |
 | Response cache | Cache `gh` responses under `out/.cache/`, keyed by window and repo, so re-running a past month is instant and offline. Needs an invalidation rule for the current window. |
 | Review turnaround from the request | The reviews card measures time from PR opened to first review. Time from *review requested* needs the PR timeline events (`gh api …/timeline`), one call per PR. |
 | Reviews received | How many reviews the author's PRs got and from whom, and rounds of changes requested before merge. |

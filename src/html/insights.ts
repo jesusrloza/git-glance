@@ -1,9 +1,13 @@
 import * as d3 from 'd3'
+import { ABANDONED_AFTER_DAYS, cleanupCommands, isSafeCleanup } from '../cleanup.ts'
 import { COMMIT_TYPES, SIZE_BUCKETS, commitType, sizeBucket, sizeBucketLabel } from '../commit-kinds.ts'
 import {
   commitsForAuthor,
   data,
+  ageLabel,
+  daysBetween,
   fillRepoLegend,
+  formatWhen,
   grain,
   hideTip,
   hourFromIso,
@@ -15,9 +19,11 @@ import {
   shortHash,
   showTip,
   styleAxis,
+  withTip,
 } from './common.ts'
-import type { AuthorSummary, Commit } from './common.ts'
-import { branchPrCell } from './github.ts'
+import type { AuthorSummary, CleanupBranch, Commit } from './common.ts'
+import { copyText } from './export.ts'
+import { branchPrCell, prForBranch } from './github.ts'
 
 type Container = d3.Selection<HTMLElement, unknown, null, undefined>
 
@@ -688,14 +694,15 @@ export function drawHotspots(container: Container, author: AuthorSummary, mode: 
 // ---------------------------------------------------------------------------
 // Work in flight: branches with unmerged commits
 
-function daysBetween(fromDay: string, toDay: string): number {
-  return Math.round((Date.parse(`${toDay}T12:00:00Z`) - Date.parse(`${fromDay}T12:00:00Z`)) / 86_400_000)
-}
+export type BranchMode = 'active' | 'all'
 
-export function drawBranches(container: Container, author: AuthorSummary) {
-  container.selectAll('*').remove()
+/** Days with no commits after which a branch counts as stale. */
+const STALE_AFTER_DAYS = 7
+
+/** Branches in flight holding unmerged commits by the author, with how many are theirs. */
+export function branchesFor(author: AuthorSummary) {
   const emails = emailsOf(author)
-  const rows = data.branches
+  return data.branches
     .map((b) => ({
       b,
       mine: Object.entries(b.authors)
@@ -703,8 +710,28 @@ export function drawBranches(container: Container, author: AuthorSummary) {
         .reduce((n, [, k]) => n + k, 0),
     }))
     .filter((r) => r.mine > 0)
-  if (rows.length === 0) {
+}
+
+/** No commit on the branch for more than STALE_AFTER_DAYS by the end of the window. */
+export function isStale(b: { lastIso: string }): boolean {
+  return daysBetween(b.lastIso.slice(0, 10), data.window.end) > STALE_AFTER_DAYS
+}
+
+export function drawBranches(container: Container, author: AuthorSummary, mode: BranchMode = 'all') {
+  container.selectAll('*').remove()
+  const mineRows = branchesFor(author)
+  if (mineRows.length === 0) {
     return emptyNote(container, 'No branches with unmerged commits from this author moved in the window.')
+  }
+  const rows =
+    mode === 'all'
+      ? mineRows
+      : mineRows.filter((r) => !isStale(r.b) || prForBranch(r.b.repo, r.b.name)?.state === 'OPEN')
+  if (rows.length === 0) {
+    return emptyNote(
+      container,
+      `All ${num(mineRows.length)} of this author's branches are stale with no open pull request. Switch to All to see them.`,
+    )
   }
 
   const table = container.append('table').attr('class', 'compact')
@@ -736,18 +763,130 @@ export function drawBranches(container: Container, author: AuthorSummary) {
   tr.append('td')
     .text((d) => (d.b.behind === 0 ? 'up to date' : `${d.b.behind} behind ${d.b.base}`))
     .classed('muted', (d) => d.b.behind === 0)
-  tr.append('td').each(function (d) {
+  const lastCell = tr.append('td').each(function (d) {
     const day = d.b.lastIso.slice(0, 10)
     const age = daysBetween(day, data.window.end)
     const cell = d3.select(this)
     cell.append('span').text(age <= 0 ? 'today' : `${age}d ago`)
-    if (age > 7) cell.append('span').attr('class', 'stale').text('stale')
+    if (age > STALE_AFTER_DAYS) cell.append('span').attr('class', 'stale').text('stale')
   })
+  withTip(lastCell, (d) => `Last commit ${formatWhen(d.b.lastIso)}\n${d.b.ref} vs ${d.b.base}`)
   if (data.github) {
     tr.append('td').each(function (d) {
       branchPrCell(d3.select(this), d.b.repo, d.b.name)
     })
   }
+}
+
+// ---------------------------------------------------------------------------
+// Branches to delete: the subject's merged or dead branches, from any time
+
+const CLEANUP_LABEL: Record<CleanupBranch['reason'], [string, string]> = {
+  merged: ['merged', 'ok'],
+  'patch-merged': ['rebase-merged', 'ok'],
+  'squash-merged': ['squash-merged', 'ok'],
+  'pr-closed': ['PR closed', 'muted'],
+  abandoned: ['quiet, no PR', 'wait'],
+}
+
+function cleanupWhy(b: CleanupBranch): string {
+  switch (b.reason) {
+    case 'merged':
+      return `Every commit is already on ${b.base}`
+    case 'patch-merged':
+      return `Every commit has a patch-identical copy on ${b.base} (rebase or cherry-pick)`
+    case 'squash-merged':
+      return `PR #${b.pr?.number} merged ${formatWhen(b.pr?.mergedIso ?? b.lastIso)}; no commits after it`
+    case 'pr-closed':
+      return `PR #${b.pr?.number} closed without merging ${formatWhen(b.pr?.closedIso ?? b.lastIso)}; no commits after it`
+    case 'abandoned':
+      return `Unmerged commits, no pull request, nothing new in ${ABANDONED_AFTER_DAYS}+ days. Check before deleting.`
+  }
+}
+
+function cleanupTip(b: CleanupBranch): string {
+  const why = cleanupWhy(b)
+  return b.longLived ? `${why}\n${b.name} looks like a long-lived branch; check your team still uses it.` : why
+}
+
+/** Not tied to the author picker: the scan only covers the subject's branches. */
+export function drawCleanup(container: Container) {
+  container.selectAll('*').remove()
+  const rows = data.cleanup
+  if (rows.length === 0) {
+    return emptyNote(container, 'Nothing to clean up: none of your branches are merged or abandoned.')
+  }
+
+  const groups = [
+    { title: 'Safe to delete', list: rows.filter((b) => isSafeCleanup(b)) },
+    { title: 'Worth a look', list: rows.filter((b) => !isSafeCleanup(b)) },
+  ].filter((g) => g.list.length > 0)
+
+  for (const group of groups) {
+    container
+      .append('p')
+      .attr('class', 'group-title')
+      .text(`${group.title} (${num(group.list.length)})`)
+    const table = container.append('table').attr('class', 'compact')
+    table
+      .append('thead')
+      .append('tr')
+      .selectAll('th')
+      .data(['Repo', 'Branch', 'Where', 'Why', 'Last commit'])
+      .join('th')
+      .text((d) => d)
+    const tr = table.append('tbody').selectAll('tr').data(group.list).join('tr')
+    tr.append('td')
+      .append('span')
+      .attr('class', 'repo-chip')
+      .style('--swatch', (d) => repoColor(d.repo))
+      .text((d) => repoLabel(d.repo))
+    tr.append('td')
+      .append('code')
+      .text((d) => d.name)
+    tr.append('td')
+      .attr('class', 'muted')
+      .text((d) => [...(d.local ? [d.current ? 'local (checked out)' : 'local'] : []), ...d.remotes].join(' · '))
+    tr.append('td').each(function (d) {
+      const cell = d3.select(this)
+      const [label, tone] = CLEANUP_LABEL[d.reason]
+      withTip(cell.append('span').attr('class', `pill ${tone}`).text(label), () => cleanupTip(d))
+      if (d.pr) {
+        cell.append('a').attr('href', d.pr.url).attr('target', '_blank').attr('rel', 'noopener').text(`#${d.pr.number}`)
+      }
+    })
+    withTip(
+      tr
+        .append('td')
+        .attr('class', 'nowrap')
+        .text((d) => ageLabel(d.lastIso)),
+      (d) => `Last commit ${formatWhen(d.lastIso)}`,
+    )
+  }
+
+  const script = [
+    ...rows.filter((b) => isSafeCleanup(b)).flatMap(cleanupCommands),
+    ...(rows.some((b) => !isSafeCleanup(b))
+      ? [
+          '',
+          '# Worth a look: long-lived branches, or unmerged work with no PR. Uncomment only what you are sure about.',
+        ]
+      : []),
+    ...rows.filter((b) => !isSafeCleanup(b)).flatMap(cleanupCommands),
+  ].join('\n')
+  const details = container.append('details').attr('class', 'cleanup-commands no-export')
+  const summary = details.append('summary')
+  summary.append('span').text('Delete commands')
+  summary
+    .append('button')
+    .attr('type', 'button')
+    .attr('class', 'btn-small')
+    .text('Copy')
+    .on('click', function (event: MouseEvent) {
+      event.preventDefault()
+      void copyText(this as HTMLButtonElement, `${script}\n`)
+    })
+  details.append('pre').text(script)
 }
 
 // ---------------------------------------------------------------------------

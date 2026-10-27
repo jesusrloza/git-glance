@@ -56,6 +56,7 @@ Every card follows the **Author** picker at the top.
 | Card | What it answers |
 |------|-----------------|
 | Overview | Commits, active days, lines added/deleted, median commit size, repos touched, current/longest streak, each compared with the previous window of the same length |
+| Status update | Shipped / in progress / needs attention, with headline numbers; *Copy as text* gives a message ready for a manager or a standup |
 | Repo lanes | Which repo had a commit on which day; weekends are circles |
 | Commits by day and repo | Stacked commit counts; ◆ marks tags created that day |
 | Lines added and deleted | Churn per day (or month) by repo; Log/Linear toggle |
@@ -64,7 +65,8 @@ Every card follows the **Author** picker at the top.
 | Commit size | XS–XL histogram of lines changed per commit |
 | Weekday × hour | When commits happen |
 | Hotspots | Most-touched files or folders |
-| Work in flight | Branches that moved in the window with commits not on the default branch |
+| Work in flight | Branches that moved in the window with commits not on the default branch; *Active* hides stale ones |
+| Branches to delete | Your branches from any time that are merged, rebase- or squash-merged, or whose PR was closed, plus copyable delete commands (nothing is deleted for you) |
 | Collaboration | Share of changes per repo, and who else changed the same files |
 | Authors × repos, Authors | Everyone in the window |
 
@@ -72,7 +74,8 @@ With `gh` available, these cards are added (also per selected author):
 
 | Card | What it answers |
 |------|-----------------|
-| Pull requests | Opened, merged, closed unmerged and open PRs, median time to merge, and the list with state, review and checks |
+| Waiting on review | Open PRs with no approval yet, who they wait on and for how long; *Copy as text* to nudge reviewers |
+| Pull requests | Opened, merged, closed unmerged and open PRs, median time to merge, and the list with state, review and checks; *Open* lists only open PRs |
 | Reviews given | Reviews on other people's PRs per repo (approved / changes requested / commented), median time to first review |
 | CI health | GitHub Actions pass rate on the author's commits and PR branches, latest failures |
 | Work in flight | Gains a *Pull request* column: the branch's PR, its state, review decision and checks |
@@ -85,8 +88,14 @@ Line counts come from `git log --numstat`. Merges, lock files and build output
 are skipped; add project-specific noise (seed data, generated code) with
 `excludePaths` in the config.
 
-**Export:** *Export PNG* saves the whole dashboard as an image. *Print / PDF*
-opens the print dialog in the light theme; choose *Save as PDF*.
+Hover a status chip (open, approved, checks pass, …) to see when it happened
+and who was involved, such as who approved and when, or who a PR is waiting on.
+
+**Export and share:** every card has *Copy image*, which puts a PNG of just
+that card on the clipboard (with a footer naming the author and window) or
+downloads it where the browser can't copy images. *Export PNG* saves the whole
+dashboard. *Print / PDF* opens the print dialog in the light theme; choose
+*Save as PDF*.
 
 ## Other windows
 

@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { noreplyLogin, parseCommitLogins, parsePrList, parseRemoteUrl, parseRunList, rollupChecks } from './github.ts'
+import {
+  noreplyLogin,
+  parseCommitLogins,
+  parsePrList,
+  parseRemoteUrl,
+  parseRunList,
+  rollupChecks,
+  rollupChecksIso,
+} from './github.ts'
 import { customRange } from './window.ts'
 
 describe('parseRemoteUrl', () => {
@@ -33,6 +41,17 @@ test('rollupChecks', () => {
   ).toBe('failure')
 })
 
+test('rollupChecksIso', () => {
+  expect(rollupChecksIso(null)).toBeNull()
+  expect(
+    rollupChecksIso([
+      { __typename: 'CheckRun', startedAt: '2026-10-02T10:00:00Z', completedAt: '2026-10-02T10:05:00Z' },
+      { __typename: 'CheckRun', startedAt: '2026-10-03T09:00:00Z', completedAt: '0001-01-01T00:00:00Z' },
+      { __typename: 'StatusContext', createdAt: '2026-10-01T00:00:00Z' },
+    ]),
+  ).toBe('2026-10-03T09:00:00Z')
+})
+
 describe('parsePrList', () => {
   const window = customRange('2026-10-01', '2026-10-31')
   const pr = (number: number, createdAt: string, reviews: { login: string; at: string }[] = []) => ({
@@ -49,7 +68,13 @@ describe('parsePrList', () => {
     baseRefName: 'main',
     reviewDecision: null,
     reviews: reviews.map((r) => ({ author: { login: r.login }, state: 'APPROVED', submittedAt: r.at, body: 'long' })),
-    statusCheckRollup: [],
+    statusCheckRollup: [{ __typename: 'CheckRun', conclusion: 'SUCCESS', completedAt: '2026-10-06T10:00:00Z' }],
+    reviewRequests: [
+      { __typename: 'User', login: 'Bob' },
+      { __typename: 'Team', name: 'Core', slug: 'core' },
+    ],
+    additions: 12,
+    deletions: 3,
   })
   const text = JSON.stringify([
     pr(1, '2026-10-05T10:00:00Z'),
@@ -82,7 +107,17 @@ describe('parsePrList', () => {
     expect(prs[0]!.author).toBe('me')
     expect(prs[1]!.reviews).toEqual([{ login: 'other', state: 'APPROVED', iso: '2026-10-02T10:00:00Z' }])
     expect(prs[0]!.reviewDecision).toBe('')
-    expect(prs[0]!.checks).toBe('none')
+    expect(prs[0]!.checks).toBe('success')
+  })
+
+  test('keeps check time, review requests, size and falls back to createdAt for updates', () => {
+    expect(prs[0]).toMatchObject({
+      checksIso: '2026-10-06T10:00:00Z',
+      reviewRequests: ['bob', 'core'],
+      updatedIso: '2026-10-05T10:00:00Z',
+      additions: 12,
+      deletions: 3,
+    })
   })
 })
 

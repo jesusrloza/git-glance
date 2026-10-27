@@ -1,4 +1,5 @@
-import type { ReportData } from '../types.ts'
+import type { CleanupBranch, ReportData } from '../types.ts'
+import { ABANDONED_AFTER_DAYS } from '../cleanup.ts'
 import {
   formatDayFull,
   formatDayLong,
@@ -567,6 +568,30 @@ function renderCodeSections(data: ReportData): string[] {
     }
   }
   lines.push('')
+
+  if (data.cleanup.length > 0) {
+    const why: Record<CleanupBranch['reason'], string> = {
+      merged: 'merged',
+      'patch-merged': 'rebase-merged',
+      'squash-merged': 'squash-merged',
+      'pr-closed': 'PR closed unmerged',
+      abandoned: `no PR, quiet ${ABANDONED_AFTER_DAYS}+ days (check first)`,
+    }
+    lines.push('## Branches to delete')
+    lines.push('')
+    lines.push('Your branches from any time that are merged, or whose pull request was closed.')
+    lines.push('')
+    lines.push('| Repo | Branch | Where | Why | Last commit |')
+    lines.push('| --- | --- | --- | --- | --- |')
+    for (const b of data.cleanup) {
+      const where = [...(b.local ? ['local'] : []), ...b.remotes].join(', ')
+      const pr = b.pr ? ` ([#${b.pr.number}](${b.pr.url}))` : ''
+      lines.push(
+        `| ${repoLabel(data, b.repo)} | \`${b.name}\` | ${where} | ${why[b.reason]}${b.longLived ? ' (long-lived name, check first)' : ''}${pr} | ${formatDayFull(b.lastIso.slice(0, 10))} |`,
+      )
+    }
+    lines.push('')
+  }
 
   lines.push(...githubLines(data))
 

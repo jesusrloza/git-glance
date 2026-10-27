@@ -22,13 +22,15 @@ import {
   tip,
 } from './common.ts'
 import type { AuthorSummary, Commit } from './common.ts'
-import { exportPng, setupPrintTheme } from './export.ts'
-import { drawCi, drawPullRequests, drawReviews } from './github.ts'
+import { copyPng, copyText, exportPng, setupPrintTheme } from './export.ts'
+import { type PrMode, drawCi, drawPullRequests, drawReviews } from './github.ts'
 import {
+  type BranchMode,
   type ChurnScale,
   type HotspotMode,
   chartPeriods,
   drawBranches,
+  drawCleanup,
   drawChurn,
   drawCollab,
   drawHotspots,
@@ -38,6 +40,7 @@ import {
   drawTagMarkers,
   drawTypes,
 } from './insights.ts'
+import { drawStatus, drawWaiting, statusText, waitingText } from './share.ts'
 
 const cell = 18
 const gap = 4
@@ -859,22 +862,47 @@ function setTheme(theme: 'light' | 'dark') {
 
 let hotspotMode: HotspotMode = 'files'
 let churnScale: ChurnScale = 'log'
+let branchMode: BranchMode = 'all'
+let prMode: PrMode = 'all'
 
 function selectedAuthor(): AuthorSummary {
   const chosen = document.getElementById('author') as HTMLSelectElement | null
   return data.authors.find((a) => a.emails.join('|') === chosen?.value) ?? data.authors.find((a) => a.isSubject)!
 }
 
-/** Wire a `.segmented` button group: keeps aria-pressed in sync and reports the chosen data-mode. */
-function segmented(selector: string, onChange: (mode: string) => void) {
+/**
+ * Wire a `.segmented` button group: keeps aria-pressed in sync and reports the
+ * chosen data-mode. With `storageKey`, the choice is remembered in this
+ * browser and the stored mode (if still offered) is returned for first render.
+ */
+function segmented(selector: string, onChange: (mode: string) => void, storageKey?: string): string | null {
   const buttons = d3.selectAll<HTMLButtonElement, unknown>(`${selector} button`)
-  buttons.on('click', function () {
-    const mode = this.dataset.mode ?? ''
+  const press = (mode: string) =>
     buttons.attr('aria-pressed', function () {
       return String(this.dataset.mode === mode)
     })
+  buttons.on('click', function () {
+    const mode = this.dataset.mode ?? ''
+    press(mode)
+    if (storageKey) {
+      try {
+        localStorage.setItem(storageKey, mode)
+      } catch {
+        // ignore quota / private mode
+      }
+    }
     onChange(mode)
   })
+  if (!storageKey) return null
+  let stored: string | null = null
+  try {
+    stored = localStorage.getItem(storageKey)
+  } catch {
+    return null
+  }
+  if (!stored || buttons.filter((_, i, nodes) => nodes[i]!.dataset.mode === stored).empty()) return null
+  press(stored)
+  return stored
 }
 
 function render(authorKey: string) {
@@ -898,6 +926,7 @@ function render(authorKey: string) {
   )
 
   drawKpis(d3.select('#kpis'), author)
+  drawStatus(d3.select('#status'), author)
   drawLanes(d3.select('#lanes'), author)
   drawBarChart(d3.select('#bars'), author)
   drawStack(d3.select('#stack'), author)
@@ -906,11 +935,12 @@ function render(authorKey: string) {
   drawSizes(d3.select('#sizes'), author)
   drawPunchcard(d3.select('#punchcard'), author)
   drawHotspots(d3.select('#hotspots'), author, hotspotMode)
-  drawBranches(d3.select('#branches'), author)
+  drawBranches(d3.select('#branches'), author, branchMode)
   drawCollab(d3.select('#collab'), author)
   drawGaps(d3.select('#gaps'), author)
   if (data.github) {
-    drawPullRequests(d3.select('#prs'), author)
+    drawWaiting(d3.select('#waiting'), author)
+    drawPullRequests(d3.select('#prs'), author, prMode)
     drawReviews(d3.select('#reviews'), author)
     drawCi(d3.select('#ci'), author)
   }
@@ -923,7 +953,64 @@ function render(authorKey: string) {
   )
 }
 
+/** Line stamped under a card exported on its own, so the image explains itself. */
+function exportFooter(): string {
+  return `${selectedAuthor().name} · ${data.window.start} to ${data.window.end} · generated ${data.generatedOn} by git-glance`
+}
+
+/**
+ * Give every card a "Copy image" button in its head. Cards with only an <h2>
+ * get a .card-head; existing head controls move into .card-actions next to it.
+ */
+function addCardCopyButtons() {
+  for (const card of document.querySelectorAll<HTMLElement>('main section.card')) {
+    const h2 = card.querySelector('h2')
+    if (!h2) continue
+    let head = h2.parentElement
+    if (!head?.classList.contains('card-head')) {
+      head = document.createElement('div')
+      head.className = 'card-head'
+      h2.before(head)
+      head.append(h2)
+    }
+    let actions = head.querySelector<HTMLElement>('.card-actions')
+    if (!actions) {
+      actions = document.createElement('div')
+      actions.className = 'card-actions no-export'
+      for (const el of [...head.children]) if (el !== h2) actions.append(el)
+      head.append(actions)
+    }
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'btn-small'
+    btn.textContent = 'Copy image'
+    btn.title = 'Copy this card as a PNG (downloads it where the browser cannot copy images)'
+    btn.addEventListener('click', async () => {
+      btn.disabled = true
+      try {
+        const how = await copyPng(
+          card,
+          [h2.textContent ?? 'card', data.window.label, selectedAuthor().name],
+          exportFooter(),
+        )
+        btn.textContent = how === 'copied' ? 'Copied' : 'Downloaded'
+      } catch (err) {
+        console.error('Card export failed', err)
+        btn.textContent = 'Export failed'
+      } finally {
+        btn.disabled = false
+        setTimeout(() => {
+          btn.textContent = 'Copy image'
+        }, 1500)
+      }
+    })
+    actions.append(btn)
+  }
+}
+
 function main() {
+  addCardCopyButtons()
+
   setTheme(currentTheme())
 
   const themeBtn = document.getElementById('theme-toggle')
@@ -949,6 +1036,7 @@ function main() {
   })
 
   drawAuthorTable(d3.select('#authors'))
+  drawCleanup(d3.select('#cleanup'))
   drawHeatmap(d3.select('#heatmap'))
 
   segmented('#hotspots-mode', (mode) => {
@@ -959,13 +1047,32 @@ function main() {
     churnScale = mode === 'linear' ? 'linear' : 'log'
     drawChurn(d3.select('#churn'), selectedAuthor(), churnScale)
   })
+  const storedBranchMode = segmented(
+    '#branches-mode',
+    (mode) => {
+      branchMode = mode === 'active' ? 'active' : 'all'
+      drawBranches(d3.select('#branches'), selectedAuthor(), branchMode)
+    },
+    'git-glance-branches-mode',
+  )
+  if (storedBranchMode === 'active') branchMode = 'active'
+  const storedPrMode = segmented(
+    '#prs-mode',
+    (mode) => {
+      prMode = mode === 'open' ? 'open' : 'all'
+      drawPullRequests(d3.select('#prs'), selectedAuthor(), prMode)
+    },
+    'git-glance-prs-mode',
+  )
+  if (storedPrMode === 'open') prMode = 'open'
 
   const pngBtn = document.getElementById('export-png') as HTMLButtonElement | null
   pngBtn?.addEventListener('click', async () => {
     pngBtn.disabled = true
     pngBtn.textContent = 'Exporting…'
     try {
-      await exportPng(['commit-visibility', data.window.label, selectedAuthor().name])
+      const shell = document.querySelector<HTMLElement>('.shell')
+      if (shell) await exportPng(shell, ['commit-visibility', data.window.label, selectedAuthor().name])
     } catch (err) {
       console.error('PNG export failed', err)
     } finally {
@@ -974,6 +1081,15 @@ function main() {
     }
   })
   document.getElementById('export-pdf')?.addEventListener('click', () => window.print())
+  for (const [id, text] of [
+    ['status-copy', statusText],
+    ['waiting-copy', waitingText],
+  ] as const) {
+    const btn = document.getElementById(id) as HTMLButtonElement | null
+    btn?.addEventListener('click', () => {
+      void copyText(btn, text(selectedAuthor()))
+    })
+  }
   // Heatmap bakes resolved theme colors; repaint it whenever print swaps the theme.
   setupPrintTheme(() => drawHeatmap(d3.select('#heatmap')))
 

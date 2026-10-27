@@ -44,6 +44,61 @@ export type BranchInfo = {
   authors: Record<string, number>
 }
 
+/** One copy of a branch (local, or on a remote) and how it relates to the default branch. */
+export type BranchCopy = {
+  /** Ref inspected, e.g. feat/login or origin/feat/login. */
+  ref: string
+  /** Remote name for a remote copy; null for a local branch. */
+  remote: string | null
+  /** Committer date of the tip (ISO). */
+  iso: string
+  /** Commits not on base, merges excluded. */
+  ahead: number
+  /** Every unmerged commit has a patch-identical twin on base (rebase-merged). */
+  patchMerged: boolean
+}
+
+/** A branch of the subject's, all copies collapsed, before PR data is applied. */
+export type BranchTip = {
+  repo: string
+  /** Absolute work-tree path, for copyable cleanup commands. */
+  path: string
+  name: string
+  base: string
+  /** The local branch is checked out, so git refuses to delete it. */
+  current: boolean
+  copies: BranchCopy[]
+}
+
+/** Lightweight PR row used to tell whether an old branch's PR was merged or closed. */
+export type BranchPr = {
+  repo: string
+  number: number
+  url: string
+  headRef: string
+  state: PrState
+  mergedIso: string | null
+  closedIso: string | null
+}
+
+/**
+ * Why a branch can go: fully merged, rebase-merged, squash-merged through a
+ * PR, PR closed unmerged, or (only a suggestion) quiet with no PR.
+ */
+export type CleanupReason = 'merged' | 'patch-merged' | 'squash-merged' | 'pr-closed' | 'abandoned'
+
+export type CleanupBranch = Omit<BranchTip, 'copies'> & {
+  local: boolean
+  /** Remotes that still hold the branch. */
+  remotes: string[]
+  reason: CleanupReason
+  /** Named like an integration branch (dev, staging, …): merged today, but probably kept on purpose. */
+  longLived: boolean
+  /** Newest tip across copies (ISO). */
+  lastIso: string
+  pr: Pick<BranchPr, 'number' | 'url' | 'mergedIso' | 'closedIso'> | null
+}
+
 export type TagInfo = {
   repo: string
   name: string
@@ -174,6 +229,8 @@ export type ReportData = {
   branches: BranchInfo[]
   /** Tags created inside the window. */
   tags: TagInfo[]
+  /** The subject's branches that look safe (or worth considering) to delete, from any time. */
+  cleanup: CleanupBranch[]
   /** PRs, reviews and CI runs from `gh`; null when GitHub data is off or unavailable. */
   github: GithubData | null
   /** Why `github` is null, for a note on the dashboard. */
@@ -208,6 +265,13 @@ export type PullRequestInfo = {
   reviews: PrReview[]
   /** Rollup of the head commit's checks. */
   checks: 'success' | 'failure' | 'pending' | 'none'
+  /** Latest check completion (or start, while running); null without checks. */
+  checksIso: string | null
+  /** Pending review requests: user logins, or team names as `org/team`. */
+  reviewRequests: string[]
+  updatedIso: string
+  additions: number
+  deletions: number
 }
 
 export type WorkflowRunInfo = {

@@ -1,7 +1,8 @@
 import * as d3 from 'd3'
-import { commitsForAuthor, data, repoColor, repoLabel } from './common.ts'
+import { ageLabel, commitsForAuthor, data, formatWhen, repoColor, repoLabel, withTip } from './common.ts'
 import { isoInWindow } from '../window.ts'
 import type { AuthorSummary, PullRequestInfo, WorkflowRunInfo } from './common.ts'
+import type { PrReview } from '../types.ts'
 
 type Container = d3.Selection<HTMLElement, unknown, null, undefined>
 
@@ -45,8 +46,14 @@ export function loginsFor(author: AuthorSummary): Set<string> {
   return logins
 }
 
-function pill(cell: d3.Selection<HTMLElement, unknown, null, undefined>, text: string, tone: string) {
-  cell.append('span').attr('class', `pill ${tone}`).text(text)
+function pill<E extends HTMLElement>(
+  cell: d3.Selection<E, unknown, null, undefined>,
+  text: string,
+  tone: string,
+  tipText?: string,
+) {
+  const el = cell.append('span').attr('class', `pill ${tone}`).text(text)
+  if (tipText) withTip(el, () => tipText)
 }
 
 function stateTone(pr: PullRequestInfo): [string, string] {
@@ -62,31 +69,93 @@ function reviewTone(decision: string): [string, string] | null {
   return null
 }
 
-function checksTone(checks: PullRequestInfo['checks']): [string, string] | null {
+export function checksTone(checks: PullRequestInfo['checks']): [string, string] | null {
   if (checks === 'success') return ['checks pass', 'ok']
   if (checks === 'failure') return ['checks fail', 'bad']
   if (checks === 'pending') return ['checks running', 'wait']
   return null
 }
 
-function repoChip(cell: d3.Selection<HTMLTableCellElement, unknown, null, undefined>, repo: string) {
+export function hoursBetween(from: string, to: string): number {
+  return (Date.parse(to) - Date.parse(from)) / 3_600_000
+}
+
+function formatDuration(hours: number): string {
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}m`
+  if (hours < 48) return `${Math.round(hours)}h`
+  return `${Math.round(hours / 24)}d`
+}
+
+function stateTip(pr: PullRequestInfo): string {
+  if (pr.state === 'MERGED' && pr.mergedIso) {
+    return `Merged ${formatWhen(pr.mergedIso)} · ${formatDuration(hoursBetween(pr.createdIso, pr.mergedIso))} after opening`
+  }
+  if (pr.state === 'CLOSED' && pr.closedIso) {
+    return `Closed without merging ${formatWhen(pr.closedIso)}\nOpened ${formatWhen(pr.createdIso)}`
+  }
+  return [
+    `Opened ${formatWhen(pr.createdIso)} · ${ageLabel(pr.createdIso)}${pr.isDraft ? ' · draft' : ''}`,
+    `Last update ${formatWhen(pr.updatedIso)}`,
+    `+${num(pr.additions)} / −${num(pr.deletions)} lines`,
+  ].join('\n')
+}
+
+/** Each reviewer's most recent approving or blocking review (comments don't change a verdict). */
+function latestVerdicts(pr: PullRequestInfo): PrReview[] {
+  const latest = new Map<string, PrReview>()
+  for (const r of [...pr.reviews].sort((a, b) => (a.iso < b.iso ? -1 : 1))) {
+    if (r.state === 'APPROVED' || r.state === 'CHANGES_REQUESTED' || r.state === 'DISMISSED') latest.set(r.login, r)
+  }
+  return [...latest.values()]
+}
+
+function reviewTip(pr: PullRequestInfo): string {
+  const verdicts = latestVerdicts(pr)
+  const line = (state: PrReview['state'], label: string) => {
+    const who = verdicts.filter((r) => r.state === state)
+    return who.length ? [`${label} by ${who.map((r) => `${r.login} (${formatWhen(r.iso)})`).join(', ')}`] : []
+  }
+  const lines = [...line('APPROVED', 'Approved'), ...line('CHANGES_REQUESTED', 'Changes requested')]
+  if (pr.reviewRequests.length) lines.push(`Waiting on ${pr.reviewRequests.join(', ')}`)
+  if (pr.reviewDecision === 'REVIEW_REQUIRED' && !pr.reviewRequests.length) lines.push('No reviewer requested')
+  lines.push(`Open ${ageLabel(pr.createdIso).replace(' ago', '')}`)
+  return lines.join('\n')
+}
+
+function checksTip(pr: PullRequestInfo): string | undefined {
+  if (!pr.checksIso) return undefined
+  const when = formatWhen(pr.checksIso)
+  if (pr.checks === 'success') return `All checks passed · last finished ${when}`
+  if (pr.checks === 'failure') return `A check failed · latest activity ${when}`
+  return `Checks running · latest activity ${when}`
+}
+
+export function repoChip(cell: d3.Selection<HTMLTableCellElement, unknown, null, undefined>, repo: string) {
   cell.append('span').attr('class', 'repo-chip').style('--swatch', repoColor(repo)).text(repoLabel(repo))
 }
 
-function prLink(cell: d3.Selection<HTMLElement, unknown, null, undefined>, pr: PullRequestInfo, withTitle: boolean) {
+export function prLink<E extends HTMLElement>(
+  cell: d3.Selection<E, unknown, null, undefined>,
+  pr: PullRequestInfo,
+  withTitle: boolean,
+) {
   const a = cell.append('a').attr('href', pr.url).attr('target', '_blank').attr('rel', 'noopener')
   a.text(withTitle ? `#${pr.number} ${pr.title}` : `#${pr.number}`)
   if (!withTitle) a.attr('title', pr.title)
 }
 
 /** Status pills for a PR: state, review decision, checks. */
-function prPills(cell: d3.Selection<HTMLElement, unknown, null, undefined>, pr: PullRequestInfo) {
+export function prPills<E extends HTMLElement>(cell: d3.Selection<E, unknown, null, undefined>, pr: PullRequestInfo) {
   const [state, tone] = stateTone(pr)
-  pill(cell, state, tone)
-  const review = pr.state === 'OPEN' ? reviewTone(pr.reviewDecision) : null
-  if (review) pill(cell, ...review)
+  pill(cell, state, tone, stateTip(pr))
+  // reviewDecision stays empty without a required-review rule; pending requests still mean "waiting".
+  const review =
+    pr.state !== 'OPEN'
+      ? null
+      : (reviewTone(pr.reviewDecision) ?? (pr.reviewRequests.length ? ['awaiting review', 'wait'] : null))
+  if (review) pill(cell, ...review, reviewTip(pr))
   const checks = pr.state === 'OPEN' ? checksTone(pr.checks) : null
-  if (checks) pill(cell, ...checks)
+  if (checks) pill(cell, ...checks, checksTip(pr))
 }
 
 /** Newest PR opened from `branch` in `repo`, if any. */
@@ -110,17 +179,7 @@ export function branchPrCell(
   prPills(cell as unknown as d3.Selection<HTMLElement, unknown, null, undefined>, pr)
 }
 
-function hoursBetween(from: string, to: string): number {
-  return (Date.parse(to) - Date.parse(from)) / 3_600_000
-}
-
-function formatDuration(hours: number): string {
-  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}m`
-  if (hours < 48) return `${Math.round(hours)}h`
-  return `${Math.round(hours / 24)}d`
-}
-
-function tiles(container: Container, items: { label: string; value: string; note?: string }[]) {
+export function tiles(container: Container, items: { label: string; value: string; note?: string }[]) {
   const wrap = container.append('div').attr('class', 'kpis')
   for (const item of items) {
     const tile = wrap.append('div').attr('class', 'kpi')
@@ -136,18 +195,36 @@ function tiles(container: Container, items: { label: string; value: string; note
 // ---------------------------------------------------------------------------
 // Pull requests opened by the author
 
-export function drawPullRequests(container: Container, author: AuthorSummary) {
-  container.selectAll('*').remove()
+export type PrMode = 'open' | 'all'
+
+/** The author's PRs with activity in the window, split the way the cards count them. */
+export function prStats(author: AuthorSummary) {
   const logins = loginsFor(author)
   const prs = (data.github?.prs ?? []).filter((p) => logins.has(p.author))
+  const merged = prs.filter((p) => inWindow(p.mergedIso))
+  const open = prs.filter((p) => p.state === 'OPEN')
+  return {
+    prs,
+    opened: prs.filter((p) => inWindow(p.createdIso)),
+    merged,
+    closed: prs.filter((p) => p.state === 'CLOSED' && inWindow(p.closedIso)),
+    open,
+    drafts: open.filter((p) => p.isDraft).length,
+    /** Hours from opened to merged, per merged PR. */
+    toMerge: merged.map((p) => hoursBetween(p.createdIso, p.mergedIso!)),
+  }
+}
+
+/** Median of hours as "5d" / "3h", or an em dash with no samples. */
+export function medianDuration(hours: number[]): string {
+  return hours.length ? formatDuration(d3.median(hours) ?? 0) : '—'
+}
+
+export function drawPullRequests(container: Container, author: AuthorSummary, mode: PrMode = 'all') {
+  container.selectAll('*').remove()
+  const { prs, opened, merged, closed, open, drafts, toMerge } = prStats(author)
   if (prs.length === 0) return emptyNote(container, 'No pull requests from this author had activity in the window.')
 
-  const opened = prs.filter((p) => inWindow(p.createdIso))
-  const merged = prs.filter((p) => inWindow(p.mergedIso))
-  const closed = prs.filter((p) => p.state === 'CLOSED' && inWindow(p.closedIso))
-  const open = prs.filter((p) => p.state === 'OPEN')
-  const drafts = open.filter((p) => p.isDraft).length
-  const toMerge = merged.map((p) => hoursBetween(p.createdIso, p.mergedIso!))
   tiles(container, [
     { label: 'Opened', value: num(opened.length) },
     { label: 'Merged', value: num(merged.length) },
@@ -155,7 +232,7 @@ export function drawPullRequests(container: Container, author: AuthorSummary) {
     { label: 'Open now', value: num(open.length), note: drafts ? `${drafts} draft${drafts === 1 ? '' : 's'}` : '' },
     {
       label: 'Median to merge',
-      value: toMerge.length ? formatDuration(d3.median(toMerge) ?? 0) : '—',
+      value: medianDuration(toMerge),
       note: toMerge.length ? `${num(toMerge.length)} merged` : '',
     },
   ])
@@ -168,7 +245,12 @@ export function drawPullRequests(container: Container, author: AuthorSummary) {
     .data(['Repo', 'Pull request', 'Status', 'Opened'])
     .join('th')
     .text((d) => d)
-  const tr = table.append('tbody').selectAll('tr').data(prs).join('tr')
+  const listed = mode === 'open' ? open : prs
+  if (listed.length === 0) {
+    table.remove()
+    return emptyNote(container, 'No open pull requests from this author. Switch to All to see the rest.')
+  }
+  const tr = table.append('tbody').selectAll('tr').data(listed).join('tr')
   tr.append('td').each(function (d) {
     repoChip(d3.select(this), d.repo)
   })
@@ -178,9 +260,13 @@ export function drawPullRequests(container: Container, author: AuthorSummary) {
   tr.append('td').each(function (d) {
     prPills(d3.select(this), d)
   })
-  tr.append('td')
-    .attr('class', 'muted nowrap')
-    .text((d) => d.createdIso.slice(0, 10))
+  withTip(
+    tr
+      .append('td')
+      .attr('class', 'muted nowrap')
+      .text((d) => d.createdIso.slice(0, 10)),
+    (d) => `Opened ${formatWhen(d.createdIso)} · ${ageLabel(d.createdIso)}\nLast update ${formatWhen(d.updatedIso)}`,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -192,15 +278,12 @@ const REVIEW_KINDS = [
   { state: 'COMMENTED', label: 'Commented' },
 ] as const
 
-export function drawReviews(container: Container, author: AuthorSummary) {
-  container.selectAll('*').remove()
+/** Reviews the author left on other people's PRs in the window, and hours from PR opened to their first review. */
+export function reviewStats(author: AuthorSummary) {
   const logins = loginsFor(author)
   const given = (data.github?.prs ?? [])
     .filter((p) => !logins.has(p.author))
     .flatMap((pr) => pr.reviews.filter((r) => logins.has(r.login) && inWindow(r.iso)).map((r) => ({ pr, r })))
-  if (given.length === 0)
-    return emptyNote(container, "No reviews from this author on other people's pull requests in the window.")
-
   const reviewedPrs = new Set(given.map((g) => `${g.pr.repo}#${g.pr.number}`))
   const firstReview = d3.rollup(
     given,
@@ -211,13 +294,22 @@ export function drawReviews(container: Container, author: AuthorSummary) {
     const pr = given.find((g) => `${g.pr.repo}#${g.pr.number}` === key)!.pr
     return hoursBetween(pr.createdIso, iso)
   })
+  return { given, reviewedPrs, turnaround }
+}
+
+export function drawReviews(container: Container, author: AuthorSummary) {
+  container.selectAll('*').remove()
+  const { given, reviewedPrs, turnaround } = reviewStats(author)
+  if (given.length === 0)
+    return emptyNote(container, "No reviews from this author on other people's pull requests in the window.")
+
   tiles(container, [
     { label: 'Reviews', value: num(given.length) },
     { label: 'PRs reviewed', value: num(reviewedPrs.size) },
     ...REVIEW_KINDS.map((k) => ({ label: k.label, value: num(given.filter((g) => g.r.state === k.state).length) })),
     {
       label: 'Median first review',
-      value: turnaround.length ? formatDuration(d3.median(turnaround) ?? 0) : '—',
+      value: medianDuration(turnaround),
       note: 'after PR opened',
     },
   ])
@@ -261,6 +353,23 @@ function runsForAuthor(author: AuthorSummary): WorkflowRunInfo[] {
 
 const FAILED = new Set(['failure', 'timed_out', 'startup_failure', 'action_required'])
 
+/** Runs that count toward a pass rate (cancelled and skipped runs don't), and the failed ones among them. */
+function passRate(list: WorkflowRunInfo[]) {
+  const finished = list.filter(
+    (r) => r.status === 'completed' && r.conclusion !== 'skipped' && r.conclusion !== 'cancelled',
+  )
+  const failed = finished.filter((r) => FAILED.has(r.conclusion))
+  return { finished, failed }
+}
+
+/** CI runs on the author's work across all repos; `pct` is null when none finished. */
+export function ciStats(author: AuthorSummary) {
+  const runs = runsForAuthor(author)
+  const { finished, failed } = passRate(runs)
+  const pct = finished.length ? Math.round(((finished.length - failed.length) / finished.length) * 100) : null
+  return { runs, finished, failed, pct }
+}
+
 export function drawCi(container: Container, author: AuthorSummary) {
   container.selectAll('*').remove()
   const runs = runsForAuthor(author)
@@ -270,11 +379,7 @@ export function drawCi(container: Container, author: AuthorSummary) {
   const rows = data.repos
     .map((repo) => {
       const list = runs.filter((r) => r.repo === repo)
-      const finished = list.filter(
-        (r) => r.status === 'completed' && r.conclusion !== 'skipped' && r.conclusion !== 'cancelled',
-      )
-      const failed = finished.filter((r) => FAILED.has(r.conclusion))
-      return { repo, list, finished, failed }
+      return { repo, list, ...passRate(list) }
     })
     .filter((row) => row.list.length > 0)
 

@@ -1,9 +1,10 @@
 import * as d3 from 'd3'
-import type { AuthorSummary, BranchInfo, Commit, DayMark, GithubData, TagInfo } from '../types.ts'
+import type { AuthorSummary, BranchInfo, CleanupBranch, Commit, DayMark, GithubData, TagInfo } from '../types.ts'
 
 export type {
   AuthorSummary,
   BranchInfo,
+  CleanupBranch,
   Commit,
   DayMark,
   GithubData,
@@ -13,6 +14,8 @@ export type {
 } from '../types.ts'
 
 export type ReportPayload = {
+  /** Local YYYY-MM-DD the report was generated; ages are measured from here. */
+  generatedOn: string
   days: string[]
   weekdays: string[]
   grain: 'day' | 'month'
@@ -30,6 +33,7 @@ export type ReportPayload = {
   previousCommits: Commit[]
   branches: BranchInfo[]
   tags: TagInfo[]
+  cleanup: CleanupBranch[]
   /** Null when GitHub data is off or gh is unavailable. */
   github: GithubData | null
 }
@@ -146,6 +150,35 @@ export function showTip(event: MouseEvent, text: string) {
 
 export function hideTip() {
   tip().style('opacity', 0)
+}
+
+/** Show `text` in the shared tooltip while hovering `sel`; also exposed as its accessible label. */
+export function withTip<E extends Element, D>(sel: d3.Selection<E, D, d3.BaseType, unknown>, text: (d: D) => string) {
+  sel
+    .attr('aria-label', function (d) {
+      const own = (this as Element).textContent?.trim()
+      return own ? `${own}: ${text(d)}` : text(d)
+    })
+    .on('mouseenter mousemove', (event, d) => showTip(event as MouseEvent, text(d)))
+    .on('mouseleave', hideTip)
+}
+
+const whenFormat = d3.timeFormat('%Y-%m-%d %H:%M')
+
+/** ISO timestamp → `YYYY-MM-DD HH:MM` in the viewer's time zone. */
+export function formatWhen(iso: string): string {
+  return whenFormat(new Date(iso))
+}
+
+/** Whole days from `fromDay` to `toDay` (both YYYY-MM-DD). */
+export function daysBetween(fromDay: string, toDay: string): number {
+  return Math.round((Date.parse(`${toDay}T12:00:00Z`) - Date.parse(`${fromDay}T12:00:00Z`)) / 86_400_000)
+}
+
+/** "today", "1d ago", … measured to the day the report was generated. */
+export function ageLabel(iso: string): string {
+  const days = daysBetween(iso.slice(0, 10), data.generatedOn)
+  return days <= 0 ? 'today' : `${days}d ago`
 }
 
 export function styleAxis(ax: d3.Selection<SVGGElement, unknown, null, undefined>) {

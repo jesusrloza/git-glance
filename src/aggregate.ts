@@ -1,14 +1,15 @@
 import type {
   AuthorSummary,
   BranchInfo,
+  CleanupBranch,
   Commit,
   DateWindow,
   DayMark,
   EmptyWeekday,
   GithubData,
+  RepoSummary,
   ReportConfig,
   ReportData,
-  RepoSummary,
   TagInfo,
   WeekendCommitDay,
 } from './types.ts'
@@ -85,6 +86,7 @@ export type AggregateExtras = {
   previousCommits?: Commit[]
   branches?: BranchInfo[]
   tags?: TagInfo[]
+  cleanup?: CleanupBranch[]
   github?: GithubData | null
   githubNote?: string | null
 }
@@ -236,6 +238,7 @@ export function aggregate(
     previousCommits: extras.previousCommits ?? [],
     branches: extras.branches ?? [],
     tags: extras.tags ?? [],
+    cleanup: extras.cleanup ?? [],
     github: extras.github ?? null,
     githubNote: extras.githubNote ?? null,
   }

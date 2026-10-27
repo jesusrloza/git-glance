@@ -3,9 +3,10 @@ import { mkdir } from 'node:fs/promises'
 import { configFlagUsage, loadConfig, projectRoot, stripConfigFlag } from './config.ts'
 import { parseWindowArgs, windowFlagsUsage } from './window-args.ts'
 import { resolveWindow } from './resolve-window.ts'
-import { fetchRepos, loadAllCommits, loadBranches, loadTags } from './git.ts'
-import { githubStateNote, githubStatus, loadGithub } from './github.ts'
-import { previousWindow } from './window.ts'
+import { fetchRepos, loadAllCommits, loadBranchTips, loadBranches, loadTags } from './git.ts'
+import { githubStateNote, githubStatus, loadBranchPrs, loadGithub } from './github.ts'
+import { classifyCleanup } from './cleanup.ts'
+import { previousWindow, todayLocal } from './window.ts'
 import { aggregate } from './aggregate.ts'
 import { renderMarkdown } from './render/markdown.ts'
 import { renderHtml } from './render/html.ts'
@@ -65,15 +66,18 @@ async function main() {
 
   const opts = { stats: true, excludePaths: config.excludePaths }
   const prevWindow = previousWindow(window)
-  const [commits, previousCommits, branches, tags, github] = await Promise.all([
+  const [commits, previousCommits, branches, tags, github, branchTips, branchPrs] = await Promise.all([
     loadAllCommits(config.repos, window, opts),
     prevWindow ? loadAllCommits(config.repos, prevWindow, opts) : Promise.resolve([]),
     Promise.all(config.repos.map((r) => loadBranches(r, window))).then((b) => b.flat()),
     Promise.all(config.repos.map((r) => loadTags(r, window))).then((t) => t.flat()),
     gh.login ? loadGithub(config.repos, window, gh.login, config.subjectLogins, config.subjectEmails) : null,
+    Promise.all(config.repos.map((r) => loadBranchTips(r, config.subjectEmails))).then((b) => b.flat()),
+    gh.login ? loadBranchPrs(config.repos) : Promise.resolve([]),
   ])
+  const cleanup = classifyCleanup(branchTips, branchPrs, todayLocal())
   console.log(
-    `Loaded ${commits.length} commits (${previousCommits.length} in previous window), ${branches.length} unmerged branches, ${tags.length} tags`,
+    `Loaded ${commits.length} commits (${previousCommits.length} in previous window), ${branches.length} unmerged branches, ${tags.length} tags, ${cleanup.length} branches to clean up`,
   )
   if (github) {
     console.log(`GitHub: ${github.prs.length} PRs, ${github.runs.length} workflow runs`)
@@ -84,6 +88,7 @@ async function main() {
     previousCommits,
     branches,
     tags,
+    cleanup,
     github,
     githubNote,
   })

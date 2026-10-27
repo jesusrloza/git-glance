@@ -1,7 +1,7 @@
 import { $ } from 'bun'
 import { resolve } from 'node:path'
 import { existsSync, statSync } from 'node:fs'
-import type { BranchInfo, Commit, DateWindow, FileChange, RepoRef, TagInfo } from './types.ts'
+import type { BranchCopy, BranchInfo, BranchTip, Commit, DateWindow, FileChange, RepoRef, TagInfo } from './types.ts'
 
 /**
  * Calendar day from an ISO-8601 author date with offset.
@@ -300,6 +300,62 @@ export async function loadBranches(repo: RepoRef, window: DateWindow): Promise<B
     }),
   )
   return branches.filter((b): b is BranchInfo => b !== null).sort((a, b) => (a.lastIso < b.lastIso ? 1 : -1))
+}
+
+/**
+ * Every branch (local or remote, from any time) whose newest tip was authored
+ * by the subject, with each copy's distance from the default branch. Feeds
+ * `classifyCleanup`; one rev-list and one cherry call per copy.
+ */
+export async function loadBranchTips(repo: RepoRef, subjectEmails: string[]): Promise<BranchTip[]> {
+  if (!(await isGitRepo(repo.path))) return []
+  const base = await defaultBranch(repo.path)
+  if (!base) return []
+  const baseShort = base.replace(/^[^/]+\//, '')
+  const subject = new Set(subjectEmails.map((e) => e.toLowerCase()))
+  const remotes = await listRemotes(repo.path)
+  const current = (await lines($`git -C ${repo.path} symbolic-ref --quiet --short HEAD`))?.[0] ?? null
+
+  const refs = await lines(
+    $`git -C ${repo.path} for-each-ref --format=${'%(refname)%09%(refname:short)%09%(committerdate:iso-strict)%09%(authoremail)'} refs/heads refs/remotes`,
+  )
+  if (!refs) return []
+
+  const byName = new Map<string, { ref: string; remote: string | null; iso: string; email: string }[]>()
+  for (const line of refs) {
+    const [full, short, iso, email] = line.split('\t')
+    if (!full || !short || !iso) continue
+    if (full.endsWith('/HEAD') || short === base) continue
+    let name = short
+    let remote: string | null = null
+    if (full.startsWith('refs/remotes/')) {
+      remote = remotes.find((r) => short.startsWith(`${r}/`)) ?? short.split('/')[0]!
+      name = short.slice(remote.length + 1)
+    }
+    if (name === baseShort) continue
+    const list = byName.get(name) ?? []
+    list.push({ ref: short, remote, iso, email: (email ?? '').replace(/^<|>$/g, '').toLowerCase() })
+    byName.set(name, list)
+  }
+
+  const tips = await Promise.all(
+    [...byName].map(async ([name, list]): Promise<BranchTip | null> => {
+      const newest = list.reduce((a, b) => (Date.parse(b.iso) > Date.parse(a.iso) ? b : a))
+      if (!subject.has(newest.email)) return null
+      const copies = await Promise.all(
+        list.map(async ({ ref, remote, iso }): Promise<BranchCopy> => {
+          const count = await lines($`git -C ${repo.path} rev-list --count --no-merges ${`${base}..${ref}`}`)
+          const ahead = Number(count?.[0] ?? 0)
+          // `git cherry` marks commits already on base (by patch id) with "-".
+          const cherry = ahead > 0 ? await lines($`git -C ${repo.path} cherry ${base} ${ref}`) : []
+          const patchMerged = ahead > 0 && !!cherry && cherry.length > 0 && cherry.every((l) => l.startsWith('-'))
+          return { ref, remote, iso, ahead, patchMerged }
+        }),
+      )
+      return { repo: repo.name, path: repo.path, name, base, current: name === current, copies }
+    }),
+  )
+  return tips.filter((t): t is BranchTip => t !== null)
 }
 
 /** Tags whose creator date falls inside the window. */
