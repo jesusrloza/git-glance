@@ -64,6 +64,7 @@ Reports never write into the scanned work trees. Fetch updates remotes only.
 | `src/html/export.ts` | Whole-page and per-card PNG export, image and text clipboard copy, light theme while printing |
 | `src/cli.ts` | `bun run report` |
 | `src/fetch.ts` | `bun run fetch` |
+| `src/pull.ts`, `src/pull-branches.ts` | `bun run pull`: fetch, then fast-forward local branches that are only behind |
 | `src/doctor.ts` | `bun run doctor` |
 | `src/authors.ts` | `bun run authors` |
 | `src/preview.ts` | Serve an existing `out/<window>/` |

@@ -178,6 +178,19 @@ Runs `git fetch --all --prune` in each configured repo. Continues after
 per-repo failures and exits 1 if any failed. Prefer this (or `report --fetch`)
 over `git pull` so working trees stay untouched.
 
+### Pull (fetch, then bring local branches up to date)
+
+```sh
+bun run pull
+bun run pull -- --no-fetch
+```
+
+Fetches like `bun run fetch`, then fast-forwards every local branch that
+tracks an upstream and is only behind it, checked out or not. It never merges,
+rebases or resets: a branch with local commits, a dirty checkout or a deleted
+upstream is listed and left alone. Use it when you read files in the repos, not
+only reports: `fetch` alone leaves the files you open as they were.
+
 ### When a report looks empty
 
 ```sh

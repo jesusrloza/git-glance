@@ -8,6 +8,7 @@
     "preview": "bun src/preview.ts",
     "view": "bun src/view.ts",
     "fetch": "bun src/fetch.ts",
+    "pull": "bun src/pull.ts",
     "doctor": "bun src/doctor.ts",
     "authors": "bun src/authors.ts",
     "clean": "rm -rf out",
