@@ -38,3 +38,6 @@ config/report.config.json
 
 # temp
 knowledge/tmp/
+
+# local backups of the private notes (7z)
+knowledge/backup/
