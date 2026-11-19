@@ -36,8 +36,6 @@ config/report.config.json
 # Finder (MacOS) folder config
 .DS_Store
 
-# temp
-knowledge/tmp/
-
-# local backups of the private notes (7z)
-knowledge/backup/
+# knowledge/ is private by default: only its README is committed
+knowledge/*
+!knowledge/README.md

@@ -16,6 +16,6 @@ Keep one file per repo (`<repo>.md`) plus files for topics that span repos. Writ
 - Generated reports: those go in `out/`.
 - Documentation for git-glance itself: that goes in `docs/`.
 
-## `tmp/`
+## Private by default
 
-`tmp/` is gitignored. Use it for private working notes, drafts and scratch scripts that should never be committed. Move anything worth keeping up into this folder.
+Everything in `knowledge/` except this README is gitignored (`knowledge/*` plus `!knowledge/README.md` in `.gitignore`). Notes, `tmp/`, `backup/` and any new folder stay local without touching `.gitignore`. To commit a file on purpose, add a `!knowledge/<path>` exception for it.
