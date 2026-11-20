@@ -130,7 +130,7 @@ Planned work is in [docs/roadmap.md](docs/roadmap.md).
 ## Layout
 
 - `docs/` — documentation for this project.
-- `knowledge/` — notes about the repos you report on (`knowledge/tmp/` is gitignored for private working notes).
+- `knowledge/` — notes about the repos you report on (`knowledge/hx/` is gitignored for private working notes).
 - `out/` — generated reports (gitignored).
 
 ## Commands
